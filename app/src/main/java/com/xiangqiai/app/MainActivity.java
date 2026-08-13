@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private Process engineProcess;
     private BufferedWriter engineIn;
     private volatile boolean nativeReady = false;
+    private volatile String nativeError = "";
 
     /** 注入到页面的桥层 JS：包装引擎对象 + stdout 转发 + 可用性标志 */
     private static final String BRIDGE_JS =
@@ -55,11 +56,12 @@ public class MainActivity extends Activity {
             // 会导致向已死进程发命令而引擎假死。
             "window.NativeEngineBridge=function(){this.WasmType='multi_simd';this.sendCommand=function(c){try{window.NativeEngine.sendCommand(String(c))}catch(e){}};this.terminate=function(){}};";
 
-    /** 引擎模式角标：native 引擎未生效时在页面左上角显示红色 WASM 小标（便于确认状态） */
+    /** 引擎模式角标：native 引擎未生效时在页面左上角显示失败原因（便于定位问题） */
     private static final String BADGE_JS =
             "!function(){try{if(window.__NATIVE_READY__)return;var b=document.createElement('div');" +
-            "b.textContent='WASM';b.style.cssText='position:fixed;top:4px;left:4px;z-index:999999;" +
-            "background:rgba(220,38,38,.85);color:#fff;font:10px monospace;padding:2px 6px;border-radius:3px;';" +
+            "b.textContent='WASM:'+(window.__NATIVE_ERROR__||'?');" +
+            "b.style.cssText='position:fixed;top:4px;left:4px;z-index:999999;background:rgba(220,38,38,.85);" +
+            "color:#fff;font:10px monospace;padding:2px 6px;border-radius:3px;max-width:80vw;';" +
             "document.body.appendChild(b);}catch(e){}}();";
 
     /** 诊断浮层：捕获页面 JS 错误，出错时在底部显示，方便截图反馈 */
@@ -107,8 +109,10 @@ public class MainActivity extends Activity {
                 // 注入全局错误捕获：出错时底部弹出一个绿色错误浮层，直接截图即可反馈
                 view.evaluateJavascript(DIAG_JS, null);
                 // 注入原生引擎桥层 + 可用性标志（MainView 懒加载在其后执行，顺序安全）
-                view.evaluateJavascript(BRIDGE_JS + "window.__NATIVE_READY__="
-                        + (nativeReady ? "true" : "false") + ";" + BADGE_JS, null);
+                view.evaluateJavascript(BRIDGE_JS
+                        + "window.__NATIVE_READY__=" + (nativeReady ? "true" : "false")
+                        + ";window.__NATIVE_ERROR__=" + JSONObject.quote(nativeError)
+                        + ";" + BADGE_JS, null);
             }
         });
 
@@ -153,6 +157,7 @@ public class MainActivity extends Activity {
             copyAsset("native/pikafish-arm64", bin);
             copyAsset("native/pikafish.nnue", nnue);
             if (!bin.setExecutable(true)) {
+                nativeError = "chmod fail";
                 Log.w("XQWEB", "setExecutable failed, fallback to wasm");
                 return;
             }
@@ -183,7 +188,9 @@ public class MainActivity extends Activity {
             nativeReady = true;
             Log.i("XQWEB", "native engine started");
         } catch (Exception e) {
-            Log.e("XQWEB", "native engine start failed", e);
+            nativeError = e.getClass().getSimpleName() + ": "
+                    + (e.getMessage() == null ? "" : e.getMessage());
+            Log.e("XQWEB", "native engine start failed: " + nativeError, e);
             stopEngine();
         }
     }
