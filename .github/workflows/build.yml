@@ -42,23 +42,46 @@ jobs:
           # 1) 下载与源码匹配的 pikafish.nnue 网络（make net 调用官方 net.sh）
           make net
           ls -la pikafish.nnue
-          # 2) 用官方 Makefile 编译（EXTRACXXFLAGS 追加 -fPIC 与 jni.h 搜索路径），
-          #    生成 PIC 目标文件；-fno-lto 关闭 LTO（否则 .o 为 LLVM IR，手工链接 .so 会 relocation 失败）
+          # 2) 手动编译（flags 与官方 Makefile 的 armv8 对齐，-fPIC 且不带 LTO，
+          #    产出普通 PIC 机器码目标文件，链接 .so 无 LTO 问题）
+          CXX=aarch64-linux-android29-clang++
           NDKINC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          EXTRA="-fPIC -I$NDKINC -fno-lto"
-          make -j4 build COMP=ndk ARCH=armv8-dotprod EXTRACXXFLAGS="$EXTRA" || true
-          if [ -z "$(find . -maxdepth 2 -name '*.o' | head -1)" ]; then
-            echo "dotprod compile produced no objects, retry armv8"
-            make clean
-            make -j4 build COMP=ndk ARCH=armv8 EXTRACXXFLAGS="$EXTRA" || true
+          BASE="-O3 -std=c++17 -fPIC -DNDEBUG -DUSE_POPCNT -DUSE_NEON=8 -DIS_64BIT -DUSE_PREFETCH -DARCH=armv8-dotprod -Wall -Wcast-qual -fno-exceptions -pthread"
+          ARCHFLAGS="-march=armv8.2-a+dotprod -DUSE_NEON_DOTPROD"
+          rm -rf /tmp/obj && mkdir -p /tmp/obj
+          ok=1
+          for src in $(find . -name '*.cpp' -not -path './universal/*' -not -path './temp_builds/*'); do
+            name=$(echo "$src" | tr '/' '_')
+            if ! $CXX -c $BASE $ARCHFLAGS -I"$(pwd)" "$src" -o "/tmp/obj/${name}.o" 2>/tmp/err.log; then
+              ok=0
+              echo "compile failed: $(tail -1 /tmp/err.log)"
+              break
+            fi
+          done
+          if [ "$ok" = "0" ]; then
+            echo "dotprod compile failed, retry armv8"
+            ARCHFLAGS=""
+            rm -f /tmp/obj/*.o
+            for src in $(find . -name '*.cpp' -not -path './universal/*' -not -path './temp_builds/*'); do
+              name=$(echo "$src" | tr '/' '_')
+              $CXX -c $BASE $ARCHFLAGS -I"$(pwd)" "$src" -o "/tmp/obj/${name}.o"
+            done
           fi
-          # 3) 链接 .so（libc++ 静态链入，规避 libc++_shared.so 依赖；libc 由系统提供）
-          OBJS=$(find . -maxdepth 2 -name '*.o' ! -name 'main.o' | tr '\n' ' ')
-          if [ -z "$OBJS" ]; then
-            echo "::error::no object files to link"
-            exit 1
-          fi
-          aarch64-linux-android29-clang++ -shared $OBJS -o libpikafishjni.so -fno-lto -static-libstdc++ -pthread
+          # wrapper（需要 jni.h 搜索路径）
+          $CXX -c $BASE $ARCHFLAGS -I"$(pwd)" -I"$NDKINC" wrapper.cpp -o /tmp/obj/wrapper.o
+          # 3) 链接 .so（排除 main.o 的可执行入口；libc++ 静态链入）
+          OBJS=$(ls /tmp/obj/*.o | grep -v '/main\.o' | tr '\n' ' ')
+          [ -n "$OBJS" ] || { echo "::error::no objects to link"; exit 1; }
+          $CXX -shared $OBJS -o libpikafishjni.so -static-libstdc++ -pthread
+          llvm-strip libpikafishjni.so
+          echo "=== .so info ==="
+          file libpikafishjni.so
+          ls -la libpikafishjni.so
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a" \
+                   "$GITHUB_WORKSPACE/app/src/main/assets/native"
+          cp libpikafishjni.so "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/"
+          cp pikafish.nnue "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish.nnue"
+          echo "native .so size: $(du -h "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libpikafishjni.so" | cut -f1)"
           llvm-strip libpikafishjni.so
           echo "=== .so info ==="
           file libpikafishjni.so
