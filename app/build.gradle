@@ -8,7 +8,7 @@ android {
 
     defaultConfig {
         applicationId "com.xiangqiai.app"
-        minSdk 24
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
@@ -17,6 +17,8 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            // 用 debug 签名，保证 APK 可直接安装（个人自用；如需上架请配置正式签名）
+            signingConfig signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

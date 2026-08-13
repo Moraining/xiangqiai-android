@@ -12,6 +12,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---- 原生引擎：NDK 交叉编译皮卡鱼（真多线程，不依赖 COOP/SharedArrayBuffer） ----
+      - name: Set up NDK
+        uses: android-ndk/ndk-download@v1
+        with:
+          ndk-version: 'r25c'
+
+      - name: Build native Pikafish engine (arm64)
+        run: |
+          set -e
+          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git /tmp/pikafish
+          cd /tmp/pikafish/src
+          # make build 会自动下载与源码匹配的 pikafish.nnue 网络
+          # 优先带 dotprod（SIMD 点积）指令集；编译失败自动回退 armv8
+          if ! make -j4 build COMP=ndk ARCH=armv8-dotprod; then
+            echo "dotprod build failed, falling back to armv8"
+            make clean
+            make -j4 build COMP=ndk ARCH=armv8
+          fi
+          ls -la pikafish pikafish.nnue
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/native"
+          cp pikafish "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64"
+          cp pikafish.nnue "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish.nnue"
+          # 去掉符号表减小体积
+          llvm-strip "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64" 2>/dev/null || true
+          echo "native engine size: $(du -h "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64" | cut -f1)"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -20,13 +47,28 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          # AGP 8.1.4 不兼容 Gradle 9.x，锁定 8.5
+          gradle-version: '8.5'
 
-      - name: Build release APK
-        working-directory: xiangqiai-android
-        run: gradle assembleRelease --no-daemon
+      - name: Build APK (debug, auto-signed)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # 自动定位包含 settings.gradle 的工程目录（兼容工程在仓库根目录或嵌套在子目录）
+          DIR=$(find . -maxdepth 3 -name settings.gradle -printf '%h\n' | head -1)
+          if [ -z "$DIR" ]; then
+            echo "::error::未找到 settings.gradle，请检查工程是否已上传"
+            exit 1
+          fi
+          echo "工程目录: $DIR"
+          cd "$DIR"
+          # debug 版 APK 由构建系统自动签名，保证可直接安装
+          gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: xiangqiai-apk
-          path: xiangqiai-android/app/build/outputs/apk/release/app-release.apk
+          path: |
+            **/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
