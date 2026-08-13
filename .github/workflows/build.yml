@@ -43,9 +43,9 @@ jobs:
           make net
           ls -la pikafish.nnue
           # 2) 用官方 Makefile 编译（EXTRACXXFLAGS 追加 -fPIC 与 jni.h 搜索路径），
-          #    生成 PIC 目标文件；EXE 链接含 wrapper 可能失败，忽略（只取 .o）
+          #    生成 PIC 目标文件；-fno-lto 关闭 LTO（否则 .o 为 LLVM IR，手工链接 .so 会 relocation 失败）
           NDKINC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          EXTRA="-fPIC -I$NDKINC"
+          EXTRA="-fPIC -I$NDKINC -fno-lto"
           make -j4 build COMP=ndk ARCH=armv8-dotprod EXTRACXXFLAGS="$EXTRA" || true
           if [ -z "$(find . -maxdepth 2 -name '*.o' | head -1)" ]; then
             echo "dotprod compile produced no objects, retry armv8"
@@ -58,7 +58,7 @@ jobs:
             echo "::error::no object files to link"
             exit 1
           fi
-          aarch64-linux-android29-clang++ -shared $OBJS -o libpikafishjni.so -static-libstdc++ -pthread
+          aarch64-linux-android29-clang++ -shared $OBJS -o libpikafishjni.so -fno-lto -static-libstdc++ -pthread
           llvm-strip libpikafishjni.so
           echo "=== .so info ==="
           file libpikafishjni.so
