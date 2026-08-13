@@ -24,9 +24,10 @@ jobs:
           # AGP 8.1.4 不兼容 Gradle 9.x，锁定 8.5
           gradle-version: '8.5'
 
-      - name: Build release APK
+      - name: Build APK (debug, auto-signed)
         run: |
           cd "$GITHUB_WORKSPACE"
+          # 自动定位包含 settings.gradle 的工程目录（兼容工程在仓库根目录或嵌套在子目录）
           DIR=$(find . -maxdepth 3 -name settings.gradle -printf '%h\n' | head -1)
           if [ -z "$DIR" ]; then
             echo "::error::未找到 settings.gradle，请检查工程是否已上传"
@@ -34,7 +35,8 @@ jobs:
           fi
           echo "工程目录: $DIR"
           cd "$DIR"
-          gradle assembleRelease --no-daemon
+          # debug 版 APK 由构建系统自动签名，保证可直接安装
+          gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
