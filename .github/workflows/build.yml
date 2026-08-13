@@ -33,18 +33,24 @@ jobs:
           echo "ANDROID_NDK_HOME=$HOME/android-ndk-r25c" >> "$GITHUB_ENV"
           echo "$HOME/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
-      - name: Build native Pikafish engine (arm64)
+      - name: Build native Pikafish engine (arm64, static)
         run: |
           set -e
           git clone --depth 1 https://github.com/official-pikafish/Pikafish.git /tmp/pikafish
           cd /tmp/pikafish/src
           # make build 会自动下载与源码匹配的 pikafish.nnue 网络
+          # EXTRALDFLAGS="-static"：全静态链接，不依赖动态链接器，
+          # 规避 Android 系统对 app 目录 exec 动态 ELF 的 Permission denied(EACCES) 限制
           # 优先带 dotprod（SIMD 点积）指令集；编译失败自动回退 armv8
-          if ! make -j4 build COMP=ndk ARCH=armv8-dotprod; then
+          if ! make -j4 build COMP=ndk ARCH=armv8-dotprod EXTRALDFLAGS="-static"; then
             echo "dotprod build failed, falling back to armv8"
             make clean
-            make -j4 build COMP=ndk ARCH=armv8
+            make -j4 build COMP=ndk ARCH=armv8 EXTRALDFLAGS="-static"
           fi
+          echo "=== binary info ==="
+          file pikafish
+          readelf -l pikafish 2>/dev/null | grep -i interp \
+            && echo "WARNING: dynamic (has interpreter)" || echo "OK: fully static"
           ls -la pikafish pikafish.nnue
           mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/native"
           cp pikafish "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64"
