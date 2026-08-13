@@ -20,6 +20,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          # AGP 8.1.4 不兼容 Gradle 9.x，锁定 8.5
+          gradle-version: '8.5'
 
       - name: Build release APK
         run: |
