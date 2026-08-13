@@ -11,16 +11,12 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 
 import org.json.JSONObject;
 
@@ -37,12 +33,19 @@ import fi.iki.elonen.NanoHTTPD;
  */
 public class MainActivity extends Activity {
 
+    // 原生皮卡鱼引擎（NDK 编译为 .so，用 JNI 加载——绕开 Android 对 app 目录 exec ELF 的
+    // Permission denied(EACCES) 限制；这是官方保证的 native 执行路径）
+    static {
+        try {
+            System.loadLibrary("pikafishjni");
+        } catch (UnsatisfiedLinkError e) {
+            Log.e("XQWEB", "loadLibrary pikafishjni failed: " + e.getMessage());
+        }
+    }
+
     private WebView webView;
     private AppServer server;
 
-    /** 原生皮卡鱼引擎（NDK 编译，真多线程，不依赖 COOP/SharedArrayBuffer） */
-    private Process engineProcess;
-    private BufferedWriter engineIn;
     private volatile boolean nativeReady = false;
     private volatile String nativeError = "";
 
@@ -148,50 +151,23 @@ public class MainActivity extends Activity {
 
     // ===================== 原生引擎（NDK 编译皮卡鱼，真多线程） =====================
 
-    /** 启动原生引擎子进程；失败时 nativeReady=false，页面自动回退 wasm 单线程引擎 */
+    /** 启动原生引擎（JNI 加载 .so）；失败时 nativeReady=false，页面自动回退 wasm 单线程引擎 */
     private void startNativeEngine() {
         try {
+            // 神经网络文件拷到私有目录，通过 UCI setoption 让引擎按绝对路径加载（JNI 无工作目录概念）
             File dir = getFilesDir();
-            File bin = new File(dir, "pikafish-arm64");
             File nnue = new File(dir, "pikafish.nnue");
-            copyAsset("native/pikafish-arm64", bin);
             copyAsset("native/pikafish.nnue", nnue);
-            if (!bin.setExecutable(true)) {
-                nativeError = "chmod fail";
-                Log.w("XQWEB", "setExecutable failed, fallback to wasm");
-                return;
-            }
-            // 工作目录设为 filesDir，引擎按默认 EvalFile "pikafish.nnue" 即可命中
-            engineProcess = new ProcessBuilder(bin.getAbsolutePath())
-                    .directory(dir)
-                    .redirectErrorStream(true)
-                    .start();
-            engineIn = new BufferedWriter(new OutputStreamWriter(engineProcess.getOutputStream()));
-            Thread t = new Thread(() -> {
-                try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(engineProcess.getInputStream()))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        final String out = line;
-                        webView.post(() -> pushToPage("__nativeStdout", out));
-                    }
-                } catch (IOException ignored) {
-                }
-                // 进程退出：通知页面回退，并触发 MainView 的 onExit
-                webView.post(() -> {
-                    pushToPage("__nativeReady", "false");
-                    pushToPage("__nativeExit", "0");
-                });
-            }, "pikafish-stdout");
-            t.setDaemon(true);
-            t.start();
+            nativeStartEngine();
+            // 命令在引擎主循环启动前入队，按序先处理（引擎 options 已初始化，可接受 setoption）
+            nativeSendCommand("setoption name EvalFile value " + nnue.getAbsolutePath());
             nativeReady = true;
-            Log.i("XQWEB", "native engine started");
-        } catch (Exception e) {
-            nativeError = e.getClass().getSimpleName() + ": "
-                    + (e.getMessage() == null ? "" : e.getMessage());
-            Log.e("XQWEB", "native engine start failed: " + nativeError, e);
-            stopEngine();
+            Log.i("XQWEB", "native engine (JNI) started");
+        } catch (Throwable t) {
+            nativeError = t.getClass().getSimpleName() + ": "
+                    + (t.getMessage() == null ? "" : t.getMessage());
+            Log.e("XQWEB", "native engine jni start failed: " + nativeError, t);
+            nativeReady = false;
         }
     }
 
@@ -204,30 +180,44 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 写一条 UCI 命令到引擎 stdin */
+    /** 写一条 UCI 命令到引擎（JNI 入队） */
     private void nativeSend(String cmd) {
-        if (engineIn != null) {
-            try {
-                engineIn.write(cmd);
-                engineIn.write("\n");
-                engineIn.flush();
-            } catch (IOException e) {
-                Log.w("XQWEB", "stdin write failed", e);
-            }
+        try {
+            nativeSendCommand(cmd);
+        } catch (Throwable t) {
+            Log.w("XQWEB", "native send failed", t);
         }
     }
 
     private void stopEngine() {
-        if (engineProcess != null) {
-            try {
-                engineProcess.destroy();
-            } catch (Exception ignored) {
-            }
-            engineProcess = null;
+        try {
+            nativeStopEngine();
+        } catch (Throwable ignored) {
         }
-        engineIn = null;
         nativeReady = false;
     }
+
+    /** JNI 回调：引擎输出一行（引擎线程调用，切回主线程再推给页面） */
+    public void onNativeOutput(String line) {
+        if (webView != null) {
+            webView.post(() -> pushToPage("__nativeStdout", line));
+        }
+    }
+
+    /** JNI 回调：引擎退出（引擎线程调用） */
+    public void onNativeExit(int code) {
+        if (webView != null) {
+            webView.post(() -> {
+                pushToPage("__nativeReady", "false");
+                pushToPage("__nativeExit", String.valueOf(code));
+            });
+        }
+    }
+
+    // JNI 接口（对应 app/src/main/cpp/wrapper.cpp）
+    private native void nativeStartEngine();
+    private native void nativeSendCommand(String cmd);
+    private native void nativeStopEngine();
 
     /** 把一行引擎输出以 JSON 字符串安全地推给页面 JS */
     private void pushToPage(String fn, String data) {

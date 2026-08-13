@@ -33,31 +33,50 @@ jobs:
           echo "ANDROID_NDK_HOME=$HOME/android-ndk-r25c" >> "$GITHUB_ENV"
           echo "$HOME/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
-      - name: Build native Pikafish engine (arm64, static)
+      - name: Build native Pikafish engine (JNI .so)
         run: |
           set -e
           git clone --depth 1 https://github.com/official-pikafish/Pikafish.git /tmp/pikafish
+          cp "$GITHUB_WORKSPACE/app/src/main/cpp/wrapper.cpp" /tmp/pikafish/src/wrapper.cpp
           cd /tmp/pikafish/src
-          # make build 会自动下载与源码匹配的 pikafish.nnue 网络
-          # EXTRALDFLAGS="-static"：全静态链接，不依赖动态链接器，
-          # 规避 Android 系统对 app 目录 exec 动态 ELF 的 Permission denied(EACCES) 限制
-          # 优先带 dotprod（SIMD 点积）指令集；编译失败自动回退 armv8
-          if ! make -j4 build COMP=ndk ARCH=armv8-dotprod EXTRALDFLAGS="-static"; then
-            echo "dotprod build failed, falling back to armv8"
-            make clean
-            make -j4 build COMP=ndk ARCH=armv8 EXTRALDFLAGS="-static"
+          # 1) 下载与源码匹配的 pikafish.nnue 网络（make net 调用官方 net.sh）
+          make net
+          ls -la pikafish.nnue
+          # 2) 用 -fPIC 重编所有源文件（.so 需要 PIC 目标文件）
+          CXX=aarch64-linux-android29-clang++
+          BASE="-O3 -std=c++17 -fPIC -DNDEBUG -Wall -Wcast-qual -fno-exceptions -pthread -DUSE_POPCNT -DUSE_NEON=8"
+          ARCHFLAGS="-march=armv8.2-a+dotprod -DUSE_NEON_DOTPROD"
+          rm -rf /tmp/obj && mkdir -p /tmp/obj
+          ok=1
+          for src in $(find . -name '*.cpp' -not -path './universal/*' -not -path './temp_builds/*'); do
+            name=$(echo "$src" | tr '/' '_')
+            if ! $CXX -c $BASE $ARCHFLAGS -I"$(pwd)" "$src" -o "/tmp/obj/${name}.o" 2>/tmp/err.log; then
+              ok=0
+              echo "dotprod compile failed: $(tail -1 /tmp/err.log)"
+              break
+            fi
+          done
+          if [ "$ok" = "0" ]; then
+            echo "retry without dotprod"
+            ARCHFLAGS=""
+            rm -f /tmp/obj/*.o
+            for src in $(find . -name '*.cpp' -not -path './universal/*' -not -path './temp_builds/*'); do
+              name=$(echo "$src" | tr '/' '_')
+              $CXX -c $BASE $ARCHFLAGS -I"$(pwd)" "$src" -o "/tmp/obj/${name}.o"
+            done
           fi
-          echo "=== binary info ==="
-          file pikafish
-          readelf -l pikafish 2>/dev/null | grep -i interp \
-            && echo "WARNING: dynamic (has interpreter)" || echo "OK: fully static"
-          ls -la pikafish pikafish.nnue
-          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/native"
-          cp pikafish "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64"
+          $CXX -c $BASE $ARCHFLAGS -I"$(pwd)" wrapper.cpp -o /tmp/obj/wrapper.o
+          # 3) 链接 .so（libc++ 静态链入，规避 libc++_shared.so 依赖；libc 由系统提供）
+          $CXX -shared -o libpikafishjni.so /tmp/obj/*.o -static-libstdc++ -pthread
+          llvm-strip libpikafishjni.so
+          echo "=== .so info ==="
+          file libpikafishjni.so
+          ls -la libpikafishjni.so pikafish.nnue
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a" \
+                   "$GITHUB_WORKSPACE/app/src/main/assets/native"
+          cp libpikafishjni.so "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/"
           cp pikafish.nnue "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish.nnue"
-          # 去掉符号表减小体积
-          llvm-strip "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64" 2>/dev/null || true
-          echo "native engine size: $(du -h "$GITHUB_WORKSPACE/app/src/main/assets/native/pikafish-arm64" | cut -f1)"
+          echo "native .so size: $(du -h "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libpikafishjni.so" | cut -f1)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
