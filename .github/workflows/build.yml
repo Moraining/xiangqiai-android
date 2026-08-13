@@ -13,15 +13,29 @@ jobs:
         uses: actions/checkout@v4
 
       # ---- 原生引擎：NDK 交叉编译皮卡鱼（真多线程，不依赖 COOP/SharedArrayBuffer） ----
-      - name: Set up NDK
-        uses: android-ndk/ndk-download@v1
+      - name: Cache NDK r25c
+        id: cache-ndk
+        uses: actions/cache@v4
         with:
-          ndk-version: 'r25c'
+          path: /home/runner/android-ndk-r25c
+          key: android-ndk-r25c
+
+      - name: Install NDK r25c
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          curl -sL -o /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          unzip -q /tmp/ndk.zip -d "$HOME"
+          rm -f /tmp/ndk.zip
+
+      - name: Set up NDK environment
+        run: |
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r25c" >> "$GITHUB_ENV"
+          echo "$HOME/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Build native Pikafish engine (arm64)
         run: |
           set -e
-          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           git clone --depth 1 https://github.com/official-pikafish/Pikafish.git /tmp/pikafish
           cd /tmp/pikafish/src
           # make build 会自动下载与源码匹配的 pikafish.nnue 网络
