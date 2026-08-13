@@ -22,11 +22,21 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build release APK
-        working-directory: xiangqiai-android
-        run: gradle assembleRelease --no-daemon
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          DIR=$(find . -maxdepth 3 -name settings.gradle -printf '%h\n' | head -1)
+          if [ -z "$DIR" ]; then
+            echo "::error::未找到 settings.gradle，请检查工程是否已上传"
+            exit 1
+          fi
+          echo "工程目录: $DIR"
+          cd "$DIR"
+          gradle assembleRelease --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: xiangqiai-apk
-          path: xiangqiai-android/app/build/outputs/apk/release/app-release.apk
+          path: |
+            **/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
