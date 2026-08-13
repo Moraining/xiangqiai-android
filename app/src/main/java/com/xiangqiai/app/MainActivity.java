@@ -86,6 +86,9 @@ public class MainActivity extends Activity {
                 res.addHeader("Cross-Origin-Embedder-Policy", "require-corp");
                 res.addHeader("Cross-Origin-Opener-Policy", "same-origin");
                 res.addHeader("Cross-Origin-Resource-Policy", "cross-origin");
+                res.addHeader("Access-Control-Allow-Origin", "*");
+                res.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+                res.addHeader("Access-Control-Allow-Headers", "*");
                 res.addHeader("Cache-Control", "no-store");
                 return res;
             } catch (IOException e) {
