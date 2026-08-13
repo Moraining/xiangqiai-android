@@ -1,0 +1,32 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.xiangqiai.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.xiangqiai.app"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    // NanoHTTPD：轻量内嵌 HTTP 服务器，用于提供带 COOP/COEP 头的本地页面
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}
