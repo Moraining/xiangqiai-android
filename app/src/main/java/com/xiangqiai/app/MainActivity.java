@@ -35,10 +35,13 @@ public class MainActivity extends Activity {
 
     // 原生皮卡鱼引擎（NDK 编译为 .so，用 JNI 加载——绕开 Android 对 app 目录 exec ELF 的
     // Permission denied(EACCES) 限制；这是官方保证的 native 执行路径）
+    private static volatile String loadError = "";
+
     static {
         try {
             System.loadLibrary("pikafishjni");
         } catch (UnsatisfiedLinkError e) {
+            loadError = e.getMessage();
             Log.e("XQWEB", "loadLibrary pikafishjni failed: " + e.getMessage());
         }
     }
@@ -62,7 +65,7 @@ public class MainActivity extends Activity {
     /** 引擎模式角标：native 引擎未生效时在页面左上角显示失败原因（便于定位问题） */
     private static final String BADGE_JS =
             "!function(){try{if(window.__NATIVE_READY__)return;var b=document.createElement('div');" +
-            "b.textContent='WASM:'+(window.__NATIVE_ERROR__||'?');" +
+            "b.textContent='WASM:'+(window.__NATIVE_ERROR__||window.__NATIVE_LOAD_ERR__||'?');" +
             "b.style.cssText='position:fixed;top:4px;left:4px;z-index:999999;background:rgba(220,38,38,.85);" +
             "color:#fff;font:10px monospace;padding:2px 6px;border-radius:3px;max-width:80vw;';" +
             "document.body.appendChild(b);}catch(e){}}();";
@@ -115,6 +118,7 @@ public class MainActivity extends Activity {
                 view.evaluateJavascript(BRIDGE_JS
                         + "window.__NATIVE_READY__=" + (nativeReady ? "true" : "false")
                         + ";window.__NATIVE_ERROR__=" + JSONObject.quote(nativeError)
+                        + ";window.__NATIVE_LOAD_ERR__=" + JSONObject.quote(loadError)
                         + ";" + BADGE_JS, null);
             }
         });

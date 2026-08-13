@@ -73,7 +73,13 @@ jobs:
           OBJS=$(ls /tmp/obj/*.o | grep -v '/main\.o' | tr '\n' ' ')
           [ -n "$OBJS" ] || { echo "::error::no objects to link"; exit 1; }
           $CXX -shared $OBJS -o libpikafishjni.so -static-libstdc++ -pthread
-          llvm-strip libpikafishjni.so
+          # 4) 校验 JNI 导出符号存在（缺失会导致 UnsatisfiedLinkError）
+          echo "=== JNI symbols before strip ==="
+          llvm-nm -D libpikafishjni.so | grep 'Java_com_xiangqiai' || echo "NO JNI SYMBOLS"
+          # 用 --strip-unneeded：只删未使用符号，保留动态导出符号（默认 strip-all 有删导出风险）
+          llvm-strip --strip-unneeded libpikafishjni.so
+          echo "=== JNI symbols after strip ==="
+          llvm-nm -D libpikafishjni.so | grep 'Java_com_xiangqiai' || echo "NO JNI SYMBOLS AFTER STRIP"
           echo "=== .so info ==="
           file libpikafishjni.so
           ls -la libpikafishjni.so
